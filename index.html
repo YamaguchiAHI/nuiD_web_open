@@ -2,121 +2,119 @@
 <html lang="ja">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>M5 FS90R BLE Controller</title>
+<title>M5 FS90R BLE Controller (4方向D-Pad)</title>
 <style>
   :root { --w: 320px; }
-  body{font-family:system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin:16px; line-height:1.5}
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:16px;line-height:1.5}
   h1{font-size:20px;margin:0 0 8px}
-  #pad{width:var(--w);height:var(--w);border:1px solid #999;border-radius:12px;touch-action:none;position:relative;user-select:none}
-  #dot{width:16px;height:16px;border-radius:50%;background:#111;position:absolute;left:calc(var(--w)/2 - 8px);top:calc(var(--w)/2 - 8px)}
+  #pad{width:var(--w);height:var(--w);border:1px solid #999;border-radius:12px;touch-action:none;position:relative;user-select:none;overflow:hidden}
+  #dot{width:18px;height:18px;border-radius:50%;background:#111;position:absolute;left:calc(var(--w)/2 - 9px);top:calc(var(--w)/2 - 9px)}
   #grid{position:absolute;inset:0;pointer-events:none;}
-  button{padding:10px 14px;margin:8px 0 12px}
-  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  button{padding:10px 14px;margin:8px 8px 12px 0}
+  .pill{display:inline-block;padding:2px 8px;border:1px solid #ccc;border-radius:999px;margin-left:8px}
   .tiny{font-size:12px;color:#666}
-  .pill{display:inline-block;padding:2px 8px;border:1px solid #ccc;border-radius:99px;margin-left:8px}
+  .hud{position:absolute;inset:0;display:grid;grid-template-columns:1fr 1fr 1fr;grid-template-rows:1fr 1fr 1fr;pointer-events:none;mix-blend-mode:multiply}
+  .hud div{border:0;opacity:0.07}
+  .hud .on{opacity:0.18}
+  .c{grid-row:2;grid-column:2}
+  .u{grid-row:1;grid-column:2;background:#0af}
+  .d{grid-row:3;grid-column:2;background:#0af}
+  .l{grid-row:2;grid-column:1;background:#fa0}
+  .r{grid-row:2;grid-column:3;background:#fa0}
 </style>
-<h1>M5 FS90R BLE Controller <span id="status" class="pill">disconnected</span></h1>
-<div class="row">
-  <button id="btn">Connect</button>
-  <button id="stop">STOP</button>
-</div>
+<h1>BLE Controller (4方向D-Pad) <span id="status" class="pill">disconnected</span></h1>
+<button id="btn">Connect</button><button id="stop">STOP</button>
 <div id="pad">
   <canvas id="grid"></canvas>
+  <div class="hud">
+    <div></div><div class="u"></div><div></div>
+    <div class="l"></div><div class="C"></div><div class="r"></div>
+    <div></div><div class="d"></div><div></div>
+  </div>
   <div id="dot"></div>
 </div>
-<p>送信: <b><span id="xy">0, 0</span></b>（-100..100）</p>
+<p>送信: <b><span id="xy">0, 0</span></b>（-100..100、方向は前後左右のみ／強さで速度変化）</p>
 <p class="tiny">※ Android/PC の Chrome で使用可。iOS Safari は不可。接続できないときはサイトの権限で Bluetooth を許可してください。</p>
 <script>
-// UUIDs must match firmware
 const SVC  = "12345678-1234-5678-1234-56789abcdef0";
 const CHAR = "12345678-1234-5678-1234-56789abcdef1";
 let dev, ch, timer=null, last=[0,0];
 const st = s => document.getElementById('status').textContent = s;
 
-async function connect() {
+async function connect(){
   try{
-    dev = await navigator.bluetooth.requestDevice({
-      filters:[{ name: "M5Basic-FS90R" }],
-      optionalServices:[SVC]
-    });
+    dev = await navigator.bluetooth.requestDevice({filters:[{name:"M5Basic-FS90R"}], optionalServices:[SVC]});
     const g = await dev.gatt.connect();
     const svc = await g.getPrimaryService(SVC);
     ch  = await svc.getCharacteristic(CHAR);
     st("connected");
-    dev.addEventListener('gattserverdisconnected', () => st("disconnected"));
-  }catch(e){
-    st("error");
-    alert("Bluetooth接続に失敗: " + e);
-  }
+    dev.addEventListener('gattserverdisconnected', ()=> st("disconnected"));
+  }catch(e){ st("error"); alert("Bluetooth接続に失敗: " + e); }
+}
+
+function sendNow(ix, iy){
+  if(!ch) return;
+  const buf = new Uint8Array([ (ix<<24)>>24, (iy<<24)>>24 ]); // int8×2
+  ch.writeValueWithoutResponse(buf).catch(()=>{});
 }
 
 function startLoop(){
   if(timer) return;
   timer = setInterval(()=>{
-    if(!ch) return;
-    const [ix,iy] = last; // -100..100
-    const buf = new Uint8Array([ (ix<<24)>>24, (iy<<24)>>24 ]); // int8×2
-    ch.writeValueWithoutResponse(buf).catch(()=>{});
-  }, 40); // ≈25Hz
+    const [ix,iy]=last; sendNow(ix,iy);
+  }, 40); // 25Hz
 }
 function stopLoop(){ if(timer){ clearInterval(timer); timer=null; } }
+function stopImmediate(){
+  sendNow(0,0); setTimeout(()=>sendNow(0,0),30); setTimeout(()=>sendNow(0,0),60);
+  last=[0,0]; updateHud(0,0); stopLoop(); placeDot(0,0);
+}
 
-function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
-
-// UI
 const pad = document.getElementById('pad');
 const dot = document.getElementById('dot');
 const xy  = document.getElementById('xy');
 const grid = document.getElementById('grid');
 const ctx = grid.getContext('2d');
+const hudU = document.querySelector('.hud .u');
+const hudD = document.querySelector('.hud .d');
+const hudL = document.querySelector('.hud .l');
+const hudR = document.querySelector('.hud .r');
+
 function drawGrid(){
   const w = grid.width = pad.clientWidth;
   const h = grid.height = pad.clientHeight;
   ctx.clearRect(0,0,w,h);
-  ctx.strokeStyle = '#ccc';
-  ctx.lineWidth = 1;
+  ctx.strokeStyle = '#ccc'; ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(w/2, 8); ctx.lineTo(w/2, h-8);
   ctx.moveTo(8, h/2); ctx.lineTo(w-8, h/2);
   ctx.stroke();
-  ctx.beginPath();
-  ctx.arc(w/2, h/2, Math.min(w,h)/2-10, 0, Math.PI*2);
-  ctx.stroke();
+  ctx.beginPath(); ctx.arc(w/2, h/2, Math.min(w,h)/2-10, 0, Math.PI*2); ctx.stroke();
 }
 drawGrid(); addEventListener('resize', drawGrid);
 
-let rect=null;
-function setXY(nx, ny){ // -1..1
-  const x = clamp(nx,-1,1);
-  const y = clamp(ny,-1,1);
-  const ix = Math.round(x*100), iy = Math.round(y*100);
-  last=[ix,iy];
-  xy.textContent = ix + ", " + iy;
+function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
+
+function quantizeTo4Way(nx, ny){
+  // 入力 -1..1 を4方向に量子化。強さ（0..1）は最大軸の大きさ。
+  const dead = 0.06; // デッドゾーン
+  let x = nx, y = ny;
+  const ax = Math.abs(x), ay = Math.abs(y);
+  if (ax < dead && ay < dead) return [0,0];
+  const bias = 0.10; // 軸決定の余裕（ヒステリシス）
+  let dirX = false;
+  if (ax > ay*(1+bias)) dirX = true;
+  else if (ay > ax*(1+bias)) dirX = false;
+  else dirX = ax >= ay;
+
+  const mag = clamp(Math.max(ax, ay), 0, 1);
+  let qx = 0, qy = 0;
+  if (dirX){ qx = Math.sign(x) * mag; qy = 0; }
+  else     { qx = 0; qy = Math.sign(y) * mag; }
+  return [qx, qy];
+}
+
+function placeDot(nx, ny){
   const w = pad.clientWidth, h = pad.clientHeight;
   const r = Math.min(w,h)/2 - 12;
-  dot.style.left = (w/2 + x*r - 8) + "px";
-  dot.style.top  = (h/2 - y*r - 8) + "px"; // yは符号反転
-}
-
-function handlePointer(e){
-  if(!rect) rect = pad.getBoundingClientRect();
-  const p = e.touches? e.touches[0]: e;
-  const cx = rect.left + rect.width/2;
-  const cy = rect.top  + rect.height/2;
-  const dx = (p.clientX - cx) / (rect.width/2 - 12);
-  const dy = (p.clientY - cy) / (rect.height/2 - 12);
-  setXY(dx, -dy);
-}
-
-document.getElementById('btn').onclick = connect;
-document.getElementById('stop').onclick = ()=> setXY(0,0);
-
-pad.addEventListener('pointerdown', e=>{pad.setPointerCapture(e.pointerId); startLoop(); handlePointer(e);});
-pad.addEventListener('pointermove', e=>{ if(e.pressure>0) handlePointer(e); });
-pad.addEventListener('pointerup',   _=>{ setXY(0,0); stopLoop(); rect=null; });
-pad.addEventListener('pointercancel',_=>{ setXY(0,0); stopLoop(); rect=null; });
-
-// 初期位置
-setXY(0,0);
-</script>
-</html>
+  dot.style.left = (w/2 + nx*r - 9) +*
