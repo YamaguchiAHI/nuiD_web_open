@@ -1,115 +1,157 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ja">
 <head>
-  <meta charset="utf-8">
-  <title>M5Stack FS90R Controller</title>
-  <style>
-    body { font-family: sans-serif; text-align: center; background: #111; color: #eee; }
-    button { width: 90px; height: 90px; margin: 6px; font-size: 20px; }
-    #pad { display: grid; grid-template-columns: repeat(3, 100px); justify-content: center; margin: 20px auto; }
-    #pad button { background:#444; border-radius:12px; border:none; color:#fff; }
-    #pad button.armed { background:#666; }
-    #pad button.active { background:#0a84ff; }
-    #stop { margin-top:20px; background:#c00; color:#fff; font-size:22px; padding:15px 40px; border-radius:10px; }
-    #spd { width: 60%; margin: 20px; }
-  </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>M5 4-Way RC</title>
+<style>
+  :root { --gap:12px; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans JP", sans-serif; background:#0b0b0c; color:#fff; }
+  header { position: sticky; top:0; background:#111; padding:12px 16px; display:flex; gap:10px; align-items:center; border-bottom:1px solid #222; z-index:10; }
+  header h1 { font-size:16px; margin:0; flex:1; color:#d7e7ff; }
+  main { padding:16px; max-width:500px; margin:0 auto; }
+  .row { display:flex; gap:var(--gap); }
+  .grid { display:grid; grid-template-columns: 1fr 1fr 1fr; gap:var(--gap); }
+  button, input[type=range] { -webkit-tap-highlight-color: transparent; }
+  .btn { background:#1c1d22; color:#fff; border:none; border-radius:14px; padding:18px; font-size:20px; width:100%; box-shadow:0 2px 0 rgba(255,255,255,0.04) inset, 0 1px 8px rgba(0,0,0,0.4); }
+  .btn:active { transform: translateY(1px); }
+  .btn.primary { background:#2563eb; }
+  .btn.danger  { background:#b91c1c; }
+  .pad { margin-top:14px; }
+  .pad .btn { height:92px; font-size:28px; }
+  .armed  { background:#2b2e39 !important; }
+  .active { background:#22c55e !important; color:#04130a !important; }
+  .card { background:#0f1115; border:1px solid #1e2330; border-radius:14px; padding:14px; }
+  .label { display:flex; justify-content:space-between; font-size:14px; color:#aab4cf; margin-bottom:6px; }
+  input[type=range]{ width:100%; }
+  small { color:#8a95b4; }
+</style>
 </head>
 <body>
-  <h2>FS90R BLE Controller</h2>
-  <button onclick="connect()">🔗 Connect</button>
-  <div id="pad">
-    <div></div><button id="btnUp">↑</button><div></div>
-    <button id="btnLeft">←</button><div></div><button id="btnRight">→</button>
-    <div></div><button id="btnDown">↓</button><div></div>
-  </div>
-  <button id="btnStop">STOP</button>
-  <div>
-    Speed: <input type="range" id="spd" min="30" max="100" value="70">
-  </div>
-  <div id="log"></div>
+  <header>
+    <h1>M5 4-Way RC</h1>
+    <button id="btnConnect" class="btn">🔗 接続</button>
+    <button id="btnStop" class="btn danger">⛔ 停止</button>
+  </header>
 
-  <script>
-  const SERVICE_UUID  = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
-  const CHAR_RW_UUID  = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
-  const LONG_MS   = 200;
-  const REPEAT_MS = 150;
+  <main>
+    <div class="card" style="margin-bottom:14px;">
+      <div class="label"><span>速度</span><span><b id="spdVal">60</b>%</span></div>
+      <input id="speed" type="range" min="30" max="100" value="60">
+      <div style="margin-top:6px;"><small>※ 全体の速度倍率。初期60%</small></div>
+    </div>
 
-  let device, server, service, charRW;
-  let activeSending = false;
+    <div class="pad">
+      <div class="grid">
+        <div></div><button id="up" class="btn">↑</button><div></div>
+        <button id="left" class="btn">←</button><div></div><button id="right" class="btn">→</button>
+        <div></div><button id="down" class="btn">↓</button><div></div>
+      </div>
+    </div>
 
-  function log(msg){ document.getElementById('log').innerText = msg; }
+    <div style="margin-top:14px;" class="card">
+      <div style="font-size:13px; line-height:1.6">
+        状態: <b id="status">未接続</b><br>
+        <small>長押しで方向入力、離すと自動停止。通信の取りこぼし対策としてアイドル時は0,0を自動送信します。</small>
+      </div>
+    </div>
+  </main>
 
-  async function connect(){
-    try{
-      device = await navigator.bluetooth.requestDevice({filters:[{services:[SERVICE_UUID]}]});
-      server = await device.gatt.connect();
-      service = await server.getPrimaryService(SERVICE_UUID);
-      charRW = await service.getCharacteristic(CHAR_RW_UUID);
-      log("Connected");
-    }catch(e){ log("Connect error: " + e); }
+<script>
+/* --- BLE UUID (Nordic UART互換) --- */
+const SERVICE_UUID  = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+const CHAR_RW_UUID  = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
+
+/* --- 長押し仕様＆ハートビート --- */
+const LONG_MS   = 200;  // 長押し成立時間
+const REPEAT_MS = 150;  // 再送/ハートビート周期
+
+let device, server, service, charRW;
+let activeSending = false;
+
+const statusEl = document.getElementById('status');
+const spdEl = document.getElementById('speed');
+const spdVal = document.getElementById('spdVal');
+
+function setStatus(s){ statusEl.textContent = s; }
+
+async function connect(){
+  try{
+    device = await navigator.bluetooth.requestDevice({
+      filters:[{ services:[SERVICE_UUID] }]
+    });
+    device.addEventListener('gattserverdisconnected', ()=> setStatus("未接続"));
+    server = await device.gatt.connect();
+    service = await server.getPrimaryService(SERVICE_UUID);
+    charRW  = await service.getCharacteristic(CHAR_RW_UUID);
+    setStatus("接続中");
+  }catch(e){
+    setStatus("接続失敗");
+    console.error(e);
   }
+}
 
-  async function send(x, y){
-    if(!charRW) return;
-    const sp = Number(document.getElementById("spd").value)|0;
-    const b = new Uint8Array(3);
-    b[0] = (x<<24)>>24;
-    b[1] = (y<<24)>>24;
-    b[2] = sp;
-    try{ await charRW.writeValueWithoutResponse(b); }
-    catch(e){ log("write err: " + e); }
-  }
+// [x(int8), y(int8), speed(uint8)] 3バイト送信
+async function send(x, y){
+  if(!charRW) return;
+  const sp = Number(spdEl.value)|0;
+  const b = new Uint8Array(3);
+  b[0] = (x<<24)>>24;  // int8
+  b[1] = (y<<24)>>24;  // int8
+  b[2] = sp;           // 0..100
+  try{ await charRW.writeValueWithoutResponse(b); } catch(e){ console.error(e); }
+}
 
-  function bindLongPress(btn, vec){
-    let pressTimer = null;
-    let repeatTimer = null;
-    let armed = false;
+function bindLongPress(btn, vec){
+  let pressTimer=null, repeatTimer=null, armed=false;
 
-    const clearAll = ()=>{
-      if (pressTimer){ clearTimeout(pressTimer); pressTimer=null; }
-      if (repeatTimer){ clearInterval(repeatTimer); repeatTimer=null; }
-      if (armed){ btn.classList.remove('active'); armed=false; }
-      activeSending = false;
-      btn.classList.remove('armed');
-    };
+  const clearAll=()=>{
+    if (pressTimer){ clearTimeout(pressTimer); pressTimer=null; }
+    if (repeatTimer){ clearInterval(repeatTimer); repeatTimer=null; }
+    if (armed){ btn.classList.remove('active'); armed=false; }
+    activeSending=false;
+    btn.classList.remove('armed');
+  };
 
-    const start = (e)=>{
-      e.preventDefault();
-      btn.classList.add('armed');
-      pressTimer = setTimeout(async ()=>{
-        armed = true;
-        btn.classList.remove('armed');
-        btn.classList.add('active');
-        if (navigator.vibrate) navigator.vibrate(10);
-        activeSending = true;
-        await send(vec[0], vec[1]);
-        repeatTimer = setInterval(()=> {
-          if (activeSending) send(vec[0], vec[1]);
-        }, REPEAT_MS);
-      }, LONG_MS);
-    };
+  const start=(e)=>{
+    e.preventDefault();
+    btn.classList.add('armed');
+    pressTimer = setTimeout(async ()=>{
+      armed=true;
+      btn.classList.remove('armed'); btn.classList.add('active');
+      if (navigator.vibrate) navigator.vibrate(10);
+      activeSending = true;
+      await send(vec[0], vec[1]);
+      repeatTimer = setInterval(()=>{ if (activeSending) send(vec[0], vec[1]); }, REPEAT_MS);
+    }, LONG_MS);
+  };
 
-    const end = (e)=>{
-      e.preventDefault();
-      clearAll();
-    };
+  const end=(e)=>{ e.preventDefault(); clearAll(); };
 
-    btn.addEventListener("touchstart", start);
-    btn.addEventListener("mousedown", start);
-    btn.addEventListener("touchend", end);
-    btn.addEventListener("mouseup", end);
-    btn.addEventListener("mouseleave", end);
-  }
+  btn.addEventListener('pointerdown', start, {passive:false});
+  btn.addEventListener('pointerup',   end,   {passive:false});
+  btn.addEventListener('pointerleave',end,   {passive:false});
+  btn.addEventListener('pointercancel',end,  {passive:false});
+  // 保険
+  btn.addEventListener('touchstart', start, {passive:false});
+  btn.addEventListener('touchend',   end,   {passive:false});
+  btn.addEventListener('mousedown',  start);
+  btn.addEventListener('mouseup',    end);
+}
 
-  bindLongPress(document.getElementById("btnUp"),    [0,  100]);
-  bindLongPress(document.getElementById("btnDown"),  [0, -100]);
-  bindLongPress(document.getElementById("btnLeft"),  [-100, 0]);
-  bindLongPress(document.getElementById("btnRight"), [100,  0]);
+document.getElementById('btnConnect').onclick = connect;
+document.getElementById('btnStop').onclick = ()=>{ activeSending=false; send(0,0); };
 
-  document.getElementById('btnStop').onclick = ()=> { activeSending=false; send(0,0); };
+bindLongPress(document.getElementById('up'),    [ 0, +100 ]);
+bindLongPress(document.getElementById('down'),  [ 0, -100 ]);
+bindLongPress(document.getElementById('left'),  [ -100,  0 ]);
+bindLongPress(document.getElementById('right'), [ +100,  0 ]);
 
-  // アイドル時のハートビートで確実停止
-  setInterval(()=> { if (charRW && !activeSending) send(0,0); }, REPEAT_MS);
-  </script>
+spdEl.addEventListener('input', ()=> spdVal.textContent = spdEl.value);
+
+// アイドル時は停止ハートビート
+setInterval(()=>{ if (charRW && !activeSending) send(0,0); }, REPEAT_MS);
+</script>
 </body>
 </html>
