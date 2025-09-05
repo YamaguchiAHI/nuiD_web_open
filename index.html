@@ -3,16 +3,18 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
-<title>M5 4-Way RC</title>
+<title>M5 4-Way RC (Long-Press)</title>
 <style>
   body { font-family: system-ui, sans-serif; margin: 16px; }
   #log { font-size: 12px; white-space: pre-wrap; background: #f5f5f5; padding:8px; border-radius:8px; }
   .row { display:flex; gap:12px; justify-content:center; margin:8px 0; }
-  button { flex:1; padding:18px; font-size:20px; border-radius:12px; }
+  button { flex:1; padding:18px; font-size:20px; border-radius:12px; user-select:none; touch-action:manipulation; }
   #grid { max-width: 420px; margin: 0 auto; }
   .wide { font-size:18px; padding:14px; }
   input[type=range] { width: 100%; }
   .label { display:flex; justify-content:space-between; font-size:14px; }
+  .armed { background:#dff3ff; }
+  .active { background:#c9f7d7; }
 </style>
 </head>
 <body>
@@ -56,6 +58,10 @@ const logEl = document.getElementById('log');
 const spdEl = document.getElementById('speed');
 const spdVal = document.getElementById('spdVal');
 
+// 長押し仕様
+const LONG_MS   = 200;  // これ以上押したら有効化
+const REPEAT_MS = 200;  // 有効中の再送間隔
+
 function log(s){ logEl.textContent = (s + "\n" + logEl.textContent).slice(0,4000); }
 function setStatus(s){ statusEl.textContent = s; }
 
@@ -81,38 +87,71 @@ async function send(x, y){
   if(!charRW) return;
   const sp = Number(spdEl.value)|0;
   const b = new Uint8Array(3);
-  b[0] = (x<<24)>>24; // int8
-  b[1] = (y<<24)>>24; // int8
-  b[2] = sp;          // 0..100
+  b[0] = (x<<24)>>24;
+  b[1] = (y<<24)>>24;
+  b[2] = sp;
   try{ await charRW.writeValueWithoutResponse(b); }
   catch(e){ log("write err: " + e); }
 }
 
-function pressBind(elem, vec){
-  const down = ()=> send(vec[0], vec[1]);
-  const up   = ()=> send(0,0);
-  // pointer系でスマホ/PC両対応
-  elem.addEventListener('pointerdown', (e)=>{ e.preventDefault(); down(); });
-  elem.addEventListener('pointerup',   (e)=>{ e.preventDefault(); up(); });
-  elem.addEventListener('pointerleave',(e)=>{ e.preventDefault(); up(); });
+// 長押しハンドラ
+function bindLongPress(btn, vec){
+  let pressTimer = null;
+  let repeatTimer = null;
+  let armed = false;   // 長押し成立フラグ
+
+  const clearAll = ()=>{
+    if (pressTimer){ clearTimeout(pressTimer); pressTimer=null; }
+    if (repeatTimer){ clearInterval(repeatTimer); repeatTimer=null; }
+    if (armed){ btn.classList.remove('active'); send(0,0); armed=false; }
+    btn.classList.remove('armed');
+  };
+
+  const start = (e)=>{
+    e.preventDefault();
+    // 長押し待ち（見た目に armed）
+    btn.classList.add('armed');
+    pressTimer = setTimeout(async ()=>{
+      armed = true;
+      btn.classList.remove('armed');
+      btn.classList.add('active');
+      // 触覚フィードバック（対応端末）
+      if (navigator.vibrate) navigator.vibrate(10);
+      // 有効化して即送
+      await send(vec[0], vec[1]);
+      // 押下中は一定間隔で再送
+      repeatTimer = setInterval(()=> send(vec[0], vec[1]), REPEAT_MS);
+    }, LONG_MS);
+  };
+
+  const end = (e)=>{
+    e.preventDefault();
+    clearAll();
+  };
+
+  // pointer系で統一
+  btn.addEventListener('pointerdown', start, {passive:false});
+  btn.addEventListener('pointerup',   end,   {passive:false});
+  btn.addEventListener('pointercancel',end,  {passive:false});
+  btn.addEventListener('pointerleave', end,  {passive:false});
   // 念のためタッチ/マウスも
-  elem.addEventListener('touchstart',  (e)=>{ e.preventDefault(); down(); }, {passive:false});
-  elem.addEventListener('touchend',    (e)=>{ e.preventDefault(); up(); },   {passive:false});
-  elem.addEventListener('mousedown',   (e)=>{ e.preventDefault(); down(); });
-  elem.addEventListener('mouseup',     (e)=>{ e.preventDefault(); up(); });
+  btn.addEventListener('touchstart',  start, {passive:false});
+  btn.addEventListener('touchend',    end,   {passive:false});
+  btn.addEventListener('mousedown',   start);
+  btn.addEventListener('mouseup',     end);
 }
 
 document.getElementById('btnConnect').onclick = connect;
 document.getElementById('btnStop').onclick = ()=> send(0,0);
 
-pressBind(document.getElementById('up'),    [ 0, +100 ]);
-pressBind(document.getElementById('down'),  [ 0, -100 ]);
-pressBind(document.getElementById('left'),  [ -100, 0 ]);
-pressBind(document.getElementById('right'), [ +100, 0 ]);
+bindLongPress(document.getElementById('up'),    [ 0, +100 ]);
+bindLongPress(document.getElementById('down'),  [ 0, -100 ]);
+bindLongPress(document.getElementById('left'),  [ -100, 0 ]);
+bindLongPress(document.getElementById('right'), [ +100, 0 ]);
 
 spdEl.addEventListener('input', ()=>{
   spdVal.textContent = spdEl.value;
-  // つまみ変更直後に速度が反映されるよう、静止中でも0,0を投げておく
+  // スライダー変更を即反映（停止状態なら0,0だけ送る）
   send(0,0);
 });
 </script>
