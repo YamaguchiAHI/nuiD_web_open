@@ -1,184 +1,120 @@
 <!doctype html>
-<html lang="ja">
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>M5 FS90R BLE Controller (4方向D-Pad)</title>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>M5 4-Way RC</title>
 <style>
-  :root { --w: 320px; }
-  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:16px;line-height:1.5}
-  h1{font-size:20px;margin:0 0 8px}
-  #pad{width:var(--w);height:var(--w);border:1px solid #999;border-radius:12px;touch-action:none;position:relative;user-select:none;overflow:hidden}
-  #dot{width:18px;height:18px;border-radius:50%;background:#111;position:absolute;left:calc(var(--w)/2 - 9px);top:calc(var(--w)/2 - 9px)}
-  #grid{position:absolute;inset:0;pointer-events:none;}
-  button{padding:10px 14px;margin:8px 8px 12px 0}
-  .pill{display:inline-block;padding:2px 8px;border:1px solid #ccc;border-radius:999px;margin-left:8px}
-  .tiny{font-size:12px;color:#666}
-  .hud{position:absolute;inset:0;display:grid;grid-template-columns:1fr 1fr 1fr;grid-template-rows:1fr 1fr 1fr;pointer-events:none;mix-blend-mode:multiply}
-  .hud div{border:0;opacity:0.07}
-  .hud .on{opacity:0.18}
-  .c{grid-row:2;grid-column:2}
-  .u{grid-row:1;grid-column:2;background:#0af}
-  .d{grid-row:3;grid-column:2;background:#0af}
-  .l{grid-row:2;grid-column:1;background:#fa0}
-  .r{grid-row:2;grid-column:3;background:#fa0}
+  body { font-family: system-ui, sans-serif; margin: 16px; }
+  #log { font-size: 12px; white-space: pre-wrap; background: #f5f5f5; padding:8px; border-radius:8px; }
+  .row { display:flex; gap:12px; justify-content:center; margin:8px 0; }
+  button { flex:1; padding:18px; font-size:20px; border-radius:12px; }
+  #grid { max-width: 420px; margin: 0 auto; }
+  .wide { font-size:18px; padding:14px; }
+  input[type=range] { width: 100%; }
+  .label { display:flex; justify-content:space-between; font-size:14px; }
 </style>
+</head>
+<body>
+<h2>M5 4-Way RC</h2>
 
-<h1>BLE Controller (4方向D-Pad)
-  <span id="status" class="pill">checking...</span>
-</h1>
-<button id="btn" disabled>Connect</button>
-<button id="stop" disabled>STOP</button>
-
-<div id="pad" aria-label="joystick area">
-  <canvas id="grid"></canvas>
-  <div class="hud">
-    <div></div><div class="u"></div><div></div>
-    <div class="l"></div><div class="c"></div><div class="r"></div>
-    <div></div><div class="d"></div><div></div>
+<div id="grid">
+  <div class="row">
+    <button id="btnConnect" class="wide">🔗 Connect</button>
+    <button id="btnStop" class="wide">⛔ Stop</button>
   </div>
-  <div id="dot"></div>
+
+  <div style="margin:12px 0;">
+    <div class="label">
+      <span>Speed</span><span><span id="spdVal">60</span>%</span>
+    </div>
+    <input id="speed" type="range" min="0" max="100" value="60">
+  </div>
+
+  <div class="row">
+    <button id="up">↑</button>
+  </div>
+  <div class="row">
+    <button id="left">←</button>
+    <button id="right">→</button>
+  </div>
+  <div class="row">
+    <button id="down">↓</button>
+  </div>
 </div>
 
-<p>送信: <b><span id="xy">0, 0</span></b>（-100..100、方向は前後左右のみ／強さで速度変化）</p>
-<p class="tiny">※ Android/PC の Chrome で使用可。iOS Safari・アプリ内ブラウザは不可。ページはHTTPSで開いてください。</p>
+<p>Status: <span id="status">DISCONNECTED</span></p>
+<pre id="log"></pre>
 
 <script>
-(() => {
-  // 環境チェック
-  const status = document.getElementById('status');
-  const btn = document.getElementById('btn');
-  const stopBtn = document.getElementById('stop');
-  if (!('bluetooth' in navigator)) {
-    status.textContent = 'unsupported (open in Chrome)';
-    alert('このブラウザはWeb Bluetooth非対応です。ChromeでHTTPSページを開いてください。');
-    return;
+let device, server, service, charRW;
+const SVC_UUID  = "12345678-1234-5678-1234-56789abcdef0";
+const CHAR_UUID = "12345678-1234-5678-1234-56789abcdef1";
+
+const statusEl = document.getElementById('status');
+const logEl = document.getElementById('log');
+const spdEl = document.getElementById('speed');
+const spdVal = document.getElementById('spdVal');
+
+function log(s){ logEl.textContent = (s + "\n" + logEl.textContent).slice(0,4000); }
+function setStatus(s){ statusEl.textContent = s; }
+
+async function connect(){
+  try{
+    device = await navigator.bluetooth.requestDevice({
+      filters:[{ namePrefix: "M5Basic" }],
+      optionalServices:[SVC_UUID]
+    });
+    device.addEventListener('gattserverdisconnected', () => { setStatus("DISCONNECTED"); });
+    server = await device.gatt.connect();
+    service = await server.getPrimaryService(SVC_UUID);
+    charRW  = await service.getCharacteristic(CHAR_UUID);
+    setStatus("CONNECTED");
+    log("connected to " + device.name);
+  }catch(e){
+    log("connect error: " + e);
   }
-  status.textContent = 'disconnected';
-  btn.disabled = false;
-  stopBtn.disabled = false;
+}
 
-  const SVC  = "12345678-1234-5678-1234-56789abcdef0";
-  const CHAR = "12345678-1234-5678-1234-56789abcdef1";
-  let dev=null, ch=null, timer=null, last=[0,0];
+// 送信： [x(int8), y(int8), speed(uint8)] の3バイト
+async function send(x, y){
+  if(!charRW) return;
+  const sp = Number(spdEl.value)|0;
+  const b = new Uint8Array(3);
+  b[0] = (x<<24)>>24; // int8
+  b[1] = (y<<24)>>24; // int8
+  b[2] = sp;          // 0..100
+  try{ await charRW.writeValueWithoutResponse(b); }
+  catch(e){ log("write err: " + e); }
+}
 
-  async function connect(){
-    try{
-      dev = await navigator.bluetooth.requestDevice({
-        filters:[{ name:"M5Basic-FS90R" }],
-        optionalServices:[SVC]
-      });
-      const g = await dev.gatt.connect();
-      const svc = await g.getPrimaryService(SVC);
-      ch  = await svc.getCharacteristic(CHAR);
-      status.textContent = 'connected';
-      dev.addEventListener('gattserverdisconnected', ()=> { status.textContent='disconnected'; });
-    }catch(e){
-      console.error(e);
-      status.textContent = 'error';
-      alert('Bluetooth接続に失敗: '+ e);
-    }
-  }
+function pressBind(elem, vec){
+  const down = ()=> send(vec[0], vec[1]);
+  const up   = ()=> send(0,0);
+  // pointer系でスマホ/PC両対応
+  elem.addEventListener('pointerdown', (e)=>{ e.preventDefault(); down(); });
+  elem.addEventListener('pointerup',   (e)=>{ e.preventDefault(); up(); });
+  elem.addEventListener('pointerleave',(e)=>{ e.preventDefault(); up(); });
+  // 念のためタッチ/マウスも
+  elem.addEventListener('touchstart',  (e)=>{ e.preventDefault(); down(); }, {passive:false});
+  elem.addEventListener('touchend',    (e)=>{ e.preventDefault(); up(); },   {passive:false});
+  elem.addEventListener('mousedown',   (e)=>{ e.preventDefault(); down(); });
+  elem.addEventListener('mouseup',     (e)=>{ e.preventDefault(); up(); });
+}
 
-  function sendNow(ix, iy){
-    if(!ch) return;
-    const buf = new Uint8Array([ (ix<<24)>>24, (iy<<24)>>24 ]);
-    ch.writeValueWithoutResponse(buf).catch(()=>{});
-  }
+document.getElementById('btnConnect').onclick = connect;
+document.getElementById('btnStop').onclick = ()=> send(0,0);
 
-  function startLoop(){
-    if(timer) return;
-    timer = setInterval(()=>{ const [ix,iy]=last; sendNow(ix,iy); }, 40);
-  }
-  function stopLoop(){ if(timer){ clearInterval(timer); timer=null; } }
-  function stopImmediate(){
-    sendNow(0,0); setTimeout(()=>sendNow(0,0),30); setTimeout(()=>sendNow(0,0),60);
-    last=[0,0]; updateHud(0,0); stopLoop(); placeDot(0,0);
-  }
+pressBind(document.getElementById('up'),    [ 0, +100 ]);
+pressBind(document.getElementById('down'),  [ 0, -100 ]);
+pressBind(document.getElementById('left'),  [ -100, 0 ]);
+pressBind(document.getElementById('right'), [ +100, 0 ]);
 
-  // UI
-  const pad = document.getElementById('pad');
-  const dot = document.getElementById('dot');
-  const xy  = document.getElementById('xy');
-  const grid = document.getElementById('grid');
-  const ctx = grid.getContext('2d');
-  const hudU = document.querySelector('.hud .u');
-  const hudD = document.querySelector('.hud .d');
-  const hudL = document.querySelector('.hud .l');
-  const hudR = document.querySelector('.hud .r');
-
-  function drawGrid(){
-    const w = grid.width = pad.clientWidth;
-    const h = grid.height = pad.clientHeight;
-    ctx.clearRect(0,0,w,h);
-    ctx.strokeStyle = '#ccc'; ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(w/2, 8); ctx.lineTo(w/2, h-8);
-    ctx.moveTo(8, h/2); ctx.lineTo(w-8, h/2);
-    ctx.stroke();
-    ctx.beginPath(); ctx.arc(w/2, h/2, Math.min(w,h)/2-10, 0, Math.PI*2); ctx.stroke();
-  }
-  drawGrid(); addEventListener('resize', drawGrid);
-
-  const clamp = (v,min,max)=> Math.max(min, Math.min(max, v));
-
-  function quantizeTo4Way(nx, ny){
-    const dead = 0.06;
-    let x = nx, y = ny;
-    const ax = Math.abs(x), ay = Math.abs(y);
-    if (ax < dead && ay < dead) return [0,0];
-    const bias = 0.10;
-    let dirX = (ax >= ay);
-    if (ax > ay*(1+bias)) dirX = true;
-    if (ay > ax*(1+bias)) dirX = false;
-    const mag = clamp(Math.max(ax, ay), 0, 1);
-    let qx=0, qy=0;
-    if (dirX){ qx = Math.sign(x)*mag; } else { qy = Math.sign(y)*mag; }
-    return [qx,qy];
-  }
-
-  function placeDot(nx, ny){
-    const w = pad.clientWidth, h = pad.clientHeight;
-    const r = Math.min(w,h)/2 - 12;
-    dot.style.left = (w/2 + nx*r - 9) + "px";
-    dot.style.top  = (h/2 - ny*r - 9) + "px";
-  }
-  function updateHud(ix,iy){
-    hudU.classList.toggle('on', iy>0);
-    hudD.classList.toggle('on', iy<0);
-    hudL.classList.toggle('on', ix<0);
-    hudR.classList.toggle('on', ix>0);
-  }
-
-  let rect=null;
-  function handlePointer(e){
-    if(!rect) rect = pad.getBoundingClientRect();
-    const p = e.touches? e.touches[0]: e;
-    const cx = rect.left + rect.width/2;
-    const cy = rect.top  + rect.height/2;
-    const dx = (p.clientX - cx) / (rect.width/2 - 12);
-    const dy = (p.clientY - cy) / (rect.height/2 - 12);
-    const nx = clamp(dx, -1, 1);
-    const ny = clamp(-dy, -1, 1);
-    const [qx, qy] = quantizeTo4Way(nx, ny);
-    placeDot(qx, qy);
-    const ix = Math.round(qx*100), iy = Math.round(qy*100);
-    last=[ix,iy];
-    xy.textContent = ix + ", " + iy;
-    updateHud(ix,iy);
-  }
-
-  btn.onclick = connect;
-  stopBtn.onclick = stopImmediate;
-
-  pad.addEventListener('pointerdown', e=>{pad.setPointerCapture(e.pointerId); startLoop(); handlePointer(e);});
-  pad.addEventListener('pointermove', e=>{ if(e.pressure>0) handlePointer(e); });
-  pad.addEventListener('pointerup',     _=>{ stopImmediate(); rect=null; });
-  pad.addEventListener('pointercancel', _=>{ stopImmediate(); rect=null; });
-  pad.addEventListener('lostpointercapture', _=>{ stopImmediate(); rect=null; });
-  window.addEventListener('blur', ()=> stopImmediate());
-  document.addEventListener('visibilitychange', ()=>{ if(document.hidden) stopImmediate(); });
-
-  placeDot(0,0); updateHud(0,0);
-})();
+spdEl.addEventListener('input', ()=>{
+  spdVal.textContent = spdEl.value;
+  // つまみ変更直後に速度が反映されるよう、静止中でも0,0を投げておく
+  send(0,0);
+});
 </script>
+</body>
 </html>
