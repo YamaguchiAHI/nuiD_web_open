@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>M5 4-Way RC (Simple)</title>
+<title>M5 4-Way RC (Stable)</title>
 <style>
   :root { --gap:12px; }
   * { box-sizing: border-box; }
-  body { margin:0; font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans JP",sans-serif; background:#0b0b0c; color:#fff; }
-  header { position: sticky; top:0; background:#111; padding:12px 16px; display:flex; gap:10px; align-items:center; border-bottom:1px solid #222; z-index:10; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans JP",sans-serif; background:#0b0b0c; color:#fff; }
+  header { position:sticky; top:0; background:#111; padding:12px 16px; display:flex; gap:10px; align-items:center; border-bottom:1px solid #222; z-index:10; }
   header h1 { font-size:16px; margin:0; flex:1; color:#d7e7ff; }
   main { padding:16px; max-width:500px; margin:0 auto; }
   .grid { display:grid; grid-template-columns: 1fr 1fr 1fr; gap:var(--gap); }
@@ -40,9 +40,7 @@
   </div>
 
   <div style="margin-top:14px;" class="card">
-    <div style="font-size:13px; line-height:1.6">
-      状態: <b id="status">未接続</b>
-    </div>
+    <div style="font-size:13px; line-height:1.6">状態: <b id="status">未接続</b></div>
   </div>
 </main>
 
@@ -51,9 +49,9 @@ const SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 const CHAR_RW_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
 
 let device, server, service, charRW;
-let holdTimer = null; // 押下中の再送タイマー
-let holding = false;  // 何かの方向を押し続けているか
-const REPEAT_MS = 120; // 押下中の再送間隔（短めでキビキビ）
+let holdTimer = null;
+let holding = false;
+const REPEAT_MS = 200; // 押下中の再送間隔（安定優先）
 
 const statusEl = document.getElementById('status');
 const spdEl = document.getElementById('speed');
@@ -87,20 +85,17 @@ async function send(x, y){
 function bindHold(btn, vec){
   const start = (e)=>{
     e.preventDefault();
-    // 押下開始：即送 & 再送ループ開始
     holding = true;
-    send(vec[0], vec[1]);
+    send(vec[0], vec[1]);                           // 即送
     if (holdTimer) clearInterval(holdTimer);
     holdTimer = setInterval(()=> { if (holding) send(vec[0], vec[1]); }, REPEAT_MS);
   };
   const end = (e)=>{
     e.preventDefault();
-    // 離したら即停止送信＆ループ解除
     holding = false;
     if (holdTimer){ clearInterval(holdTimer); holdTimer=null; }
-    send(0,0);
+    send(0,0);                                      // 即停止
   };
-  // pointer系のみ（多重発火防止）
   btn.addEventListener('pointerdown', start, {passive:false});
   btn.addEventListener('pointerup',   end,   {passive:false});
   btn.addEventListener('pointerleave',end,   {passive:false});
