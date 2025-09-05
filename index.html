@@ -1,159 +1,115 @@
-<!doctype html>
-<html>
+<!DOCTYPE html>
+<html lang="ja">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
-<title>M5 4-Way RC (Long-Press)</title>
-<style>
-  body { font-family: system-ui, sans-serif; margin: 16px; }
-  #log { font-size: 12px; white-space: pre-wrap; background: #f5f5f5; padding:8px; border-radius:8px; }
-  .row { display:flex; gap:12px; justify-content:center; margin:8px 0; }
-  button { flex:1; padding:18px; font-size:20px; border-radius:12px; user-select:none; touch-action:manipulation; }
-  #grid { max-width: 420px; margin: 0 auto; }
-  .wide { font-size:18px; padding:14px; }
-  input[type=range] { width: 100%; }
-  .label { display:flex; justify-content:space-between; font-size:14px; }
-  .armed { background:#dff3ff; }
-  .active { background:#c9f7d7; }
-</style>
+  <meta charset="utf-8">
+  <title>M5Stack FS90R Controller</title>
+  <style>
+    body { font-family: sans-serif; text-align: center; background: #111; color: #eee; }
+    button { width: 90px; height: 90px; margin: 6px; font-size: 20px; }
+    #pad { display: grid; grid-template-columns: repeat(3, 100px); justify-content: center; margin: 20px auto; }
+    #pad button { background:#444; border-radius:12px; border:none; color:#fff; }
+    #pad button.armed { background:#666; }
+    #pad button.active { background:#0a84ff; }
+    #stop { margin-top:20px; background:#c00; color:#fff; font-size:22px; padding:15px 40px; border-radius:10px; }
+    #spd { width: 60%; margin: 20px; }
+  </style>
 </head>
 <body>
-<h2>M5 4-Way RC</h2>
-
-<div id="grid">
-  <div class="row">
-    <button id="btnConnect" class="wide">🔗 Connect</button>
-    <button id="btnStop" class="wide">⛔ Stop</button>
+  <h2>FS90R BLE Controller</h2>
+  <button onclick="connect()">🔗 Connect</button>
+  <div id="pad">
+    <div></div><button id="btnUp">↑</button><div></div>
+    <button id="btnLeft">←</button><div></div><button id="btnRight">→</button>
+    <div></div><button id="btnDown">↓</button><div></div>
   </div>
-
-  <div style="margin:12px 0;">
-    <div class="label">
-      <span>Speed</span><span><span id="spdVal">60</span>%</span>
-    </div>
-    <input id="speed" type="range" min="0" max="100" value="60">
+  <button id="btnStop">STOP</button>
+  <div>
+    Speed: <input type="range" id="spd" min="30" max="100" value="70">
   </div>
+  <div id="log"></div>
 
-  <div class="row">
-    <button id="up">↑</button>
-  </div>
-  <div class="row">
-    <button id="left">←</button>
-    <button id="right">→</button>
-  </div>
-  <div class="row">
-    <button id="down">↓</button>
-  </div>
-</div>
+  <script>
+  const SERVICE_UUID  = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+  const CHAR_RW_UUID  = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
+  const LONG_MS   = 200;
+  const REPEAT_MS = 150;
 
-<p>Status: <span id="status">DISCONNECTED</span></p>
-<pre id="log"></pre>
+  let device, server, service, charRW;
+  let activeSending = false;
 
-<script>
-let device, server, service, charRW;
-const SVC_UUID  = "12345678-1234-5678-1234-56789abcdef0";
-const CHAR_UUID = "12345678-1234-5678-1234-56789abcdef1";
+  function log(msg){ document.getElementById('log').innerText = msg; }
 
-const statusEl = document.getElementById('status');
-const logEl = document.getElementById('log');
-const spdEl = document.getElementById('speed');
-const spdVal = document.getElementById('spdVal');
-
-// 長押し仕様
-const LONG_MS   = 200;  // これ以上押したら有効化
-const REPEAT_MS = 200;  // 有効中の再送間隔
-
-function log(s){ logEl.textContent = (s + "\n" + logEl.textContent).slice(0,4000); }
-function setStatus(s){ statusEl.textContent = s; }
-
-async function connect(){
-  try{
-    device = await navigator.bluetooth.requestDevice({
-      filters:[{ namePrefix: "M5Basic" }],
-      optionalServices:[SVC_UUID]
-    });
-    device.addEventListener('gattserverdisconnected', () => { setStatus("DISCONNECTED"); });
-    server = await device.gatt.connect();
-    service = await server.getPrimaryService(SVC_UUID);
-    charRW  = await service.getCharacteristic(CHAR_UUID);
-    setStatus("CONNECTED");
-    log("connected to " + device.name);
-  }catch(e){
-    log("connect error: " + e);
+  async function connect(){
+    try{
+      device = await navigator.bluetooth.requestDevice({filters:[{services:[SERVICE_UUID]}]});
+      server = await device.gatt.connect();
+      service = await server.getPrimaryService(SERVICE_UUID);
+      charRW = await service.getCharacteristic(CHAR_RW_UUID);
+      log("Connected");
+    }catch(e){ log("Connect error: " + e); }
   }
-}
 
-// 送信： [x(int8), y(int8), speed(uint8)] の3バイト
-async function send(x, y){
-  if(!charRW) return;
-  const sp = Number(spdEl.value)|0;
-  const b = new Uint8Array(3);
-  b[0] = (x<<24)>>24;
-  b[1] = (y<<24)>>24;
-  b[2] = sp;
-  try{ await charRW.writeValueWithoutResponse(b); }
-  catch(e){ log("write err: " + e); }
-}
+  async function send(x, y){
+    if(!charRW) return;
+    const sp = Number(document.getElementById("spd").value)|0;
+    const b = new Uint8Array(3);
+    b[0] = (x<<24)>>24;
+    b[1] = (y<<24)>>24;
+    b[2] = sp;
+    try{ await charRW.writeValueWithoutResponse(b); }
+    catch(e){ log("write err: " + e); }
+  }
 
-// 長押しハンドラ
-function bindLongPress(btn, vec){
-  let pressTimer = null;
-  let repeatTimer = null;
-  let armed = false;   // 長押し成立フラグ
+  function bindLongPress(btn, vec){
+    let pressTimer = null;
+    let repeatTimer = null;
+    let armed = false;
 
-  const clearAll = ()=>{
-    if (pressTimer){ clearTimeout(pressTimer); pressTimer=null; }
-    if (repeatTimer){ clearInterval(repeatTimer); repeatTimer=null; }
-    if (armed){ btn.classList.remove('active'); send(0,0); armed=false; }
-    btn.classList.remove('armed');
-  };
-
-  const start = (e)=>{
-    e.preventDefault();
-    // 長押し待ち（見た目に armed）
-    btn.classList.add('armed');
-    pressTimer = setTimeout(async ()=>{
-      armed = true;
+    const clearAll = ()=>{
+      if (pressTimer){ clearTimeout(pressTimer); pressTimer=null; }
+      if (repeatTimer){ clearInterval(repeatTimer); repeatTimer=null; }
+      if (armed){ btn.classList.remove('active'); armed=false; }
+      activeSending = false;
       btn.classList.remove('armed');
-      btn.classList.add('active');
-      // 触覚フィードバック（対応端末）
-      if (navigator.vibrate) navigator.vibrate(10);
-      // 有効化して即送
-      await send(vec[0], vec[1]);
-      // 押下中は一定間隔で再送
-      repeatTimer = setInterval(()=> send(vec[0], vec[1]), REPEAT_MS);
-    }, LONG_MS);
-  };
+    };
 
-  const end = (e)=>{
-    e.preventDefault();
-    clearAll();
-  };
+    const start = (e)=>{
+      e.preventDefault();
+      btn.classList.add('armed');
+      pressTimer = setTimeout(async ()=>{
+        armed = true;
+        btn.classList.remove('armed');
+        btn.classList.add('active');
+        if (navigator.vibrate) navigator.vibrate(10);
+        activeSending = true;
+        await send(vec[0], vec[1]);
+        repeatTimer = setInterval(()=> {
+          if (activeSending) send(vec[0], vec[1]);
+        }, REPEAT_MS);
+      }, LONG_MS);
+    };
 
-  // pointer系で統一
-  btn.addEventListener('pointerdown', start, {passive:false});
-  btn.addEventListener('pointerup',   end,   {passive:false});
-  btn.addEventListener('pointercancel',end,  {passive:false});
-  btn.addEventListener('pointerleave', end,  {passive:false});
-  // 念のためタッチ/マウスも
-  btn.addEventListener('touchstart',  start, {passive:false});
-  btn.addEventListener('touchend',    end,   {passive:false});
-  btn.addEventListener('mousedown',   start);
-  btn.addEventListener('mouseup',     end);
-}
+    const end = (e)=>{
+      e.preventDefault();
+      clearAll();
+    };
 
-document.getElementById('btnConnect').onclick = connect;
-document.getElementById('btnStop').onclick = ()=> send(0,0);
+    btn.addEventListener("touchstart", start);
+    btn.addEventListener("mousedown", start);
+    btn.addEventListener("touchend", end);
+    btn.addEventListener("mouseup", end);
+    btn.addEventListener("mouseleave", end);
+  }
 
-bindLongPress(document.getElementById('up'),    [ 0, +100 ]);
-bindLongPress(document.getElementById('down'),  [ 0, -100 ]);
-bindLongPress(document.getElementById('left'),  [ -100, 0 ]);
-bindLongPress(document.getElementById('right'), [ +100, 0 ]);
+  bindLongPress(document.getElementById("btnUp"),    [0,  100]);
+  bindLongPress(document.getElementById("btnDown"),  [0, -100]);
+  bindLongPress(document.getElementById("btnLeft"),  [-100, 0]);
+  bindLongPress(document.getElementById("btnRight"), [100,  0]);
 
-spdEl.addEventListener('input', ()=>{
-  spdVal.textContent = spdEl.value;
-  // スライダー変更を即反映（停止状態なら0,0だけ送る）
-  send(0,0);
-});
-</script>
+  document.getElementById('btnStop').onclick = ()=> { activeSending=false; send(0,0); };
+
+  // アイドル時のハートビートで確実停止
+  setInterval(()=> { if (charRW && !activeSending) send(0,0); }, REPEAT_MS);
+  </script>
 </body>
 </html>
